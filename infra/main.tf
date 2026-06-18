@@ -84,14 +84,6 @@ resource "aws_security_group" "sg_1" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
-  # Spring Boot 직접 접근 포트
-  ingress {
-    from_port   = 8090
-    to_port     = 8090
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
   # 아웃바운드 전체 허용 (SSM, Docker Hub, GHCR 등)
   egress {
     from_port   = 0
