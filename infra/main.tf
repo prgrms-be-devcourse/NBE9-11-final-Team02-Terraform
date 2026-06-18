@@ -76,7 +76,15 @@ resource "aws_security_group" "sg_1" {
   name   = "${var.prefix}-sg"
   vpc_id = aws_vpc.vpc_1.id
 
-  # Spring Boot 접근 포트
+  # HTTP - Nginx가 80포트로 받아서 8090으로 프록시
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # Spring Boot 직접 접근 포트
   ingress {
     from_port   = 8090
     to_port     = 8090
@@ -162,6 +170,22 @@ sudo sh -c 'echo "/swapfile swap swap defaults 0 0" >> /etc/fstab'
 yum install docker -y
 systemctl enable docker
 systemctl start docker
+
+# Nginx 설치 및 설정 (80 → 8090 리버스 프록시)
+yum install -y nginx
+cat << 'NGINX_EOF' > /etc/nginx/conf.d/sportteam.conf
+server {
+    listen 80;
+
+    location / {
+        proxy_pass http://localhost:8090;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+NGINX_EOF
+systemctl enable nginx
+systemctl start nginx
 
 # Docker 컨테이너들이 통신할 내부 네트워크
 docker network create common
