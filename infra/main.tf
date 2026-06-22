@@ -163,45 +163,105 @@ yum install docker -y
 systemctl enable docker
 systemctl start docker
 
-# Nginx 설치 및 설정 (80 → 8090 리버스 프록시)
-yum install -y nginx
-cat << 'NGINX_EOF' > /etc/nginx/conf.d/sportteam.conf
+# docker-compose 설치
+curl -SL https://github.com/docker/compose/releases/download/v2.27.0/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
+chmod +x /usr/local/bin/docker-compose
+
+# Docker 내부 네트워크 생성
+docker network create common
+
+# Nginx 설정 파일 준비 (컨테이너 이름은 첫 배포 시 cd.yaml이 교체)
+mkdir -p /home/ec2-user/nginx/conf.d
+cat << 'NGINX_EOF' > /home/ec2-user/nginx/conf.d/sportteam.conf
 server {
     listen 80;
 
     location / {
-        proxy_pass http://localhost:8090;
+        proxy_pass http://app1_1:8090;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
     }
 }
 NGINX_EOF
-systemctl enable nginx
-systemctl start nginx
 
-# Docker 컨테이너들이 통신할 내부 네트워크
-docker network create common
+# docker-compose.yaml 배포
+mkdir -p /home/ec2-user/app
+cat << 'COMPOSE_EOF' > /home/ec2-user/app/docker-compose.yaml
+services:
+  nginx:
+    image: nginx:1.30
+    container_name: nginx_1
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - /home/ec2-user/nginx/conf.d:/etc/nginx/conf.d:ro
+    networks:
+      - common
 
-# Redis
-docker run -d \
-  --name=redis_1 \
-  --restart unless-stopped \
-  --network common \
-  -p 6379:6379 \
-  -e TZ=Asia/Seoul \
-  redis:7.4 --requirepass ${var.password_1}
+  mysql:
+    image: mysql:8.4
+    container_name: mysql_1
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${var.password_1}
+      MYSQL_DATABASE: team02_prod
+      TZ: Asia/Seoul
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - common
 
-# MySQL
-docker run -d \
-  --name mysql_1 \
-  --restart unless-stopped \
-  -v /dockerProjects/mysql_1/volumes/var/lib/mysql:/var/lib/mysql \
-  -v /dockerProjects/mysql_1/volumes/etc/mysql/conf.d:/etc/mysql/conf.d \
-  --network common \
-  -p 3306:3306 \
-  -e MYSQL_ROOT_PASSWORD=${var.password_1} \
-  -e TZ=Asia/Seoul \
-  mysql:8.4
+  redis:
+    image: redis:7.4
+    container_name: redis_1
+    restart: unless-stopped
+    command: redis-server --requirepass ${var.password_1}
+    environment:
+      TZ: Asia/Seoul
+    ports:
+      - "6379:6379"
+    networks:
+      - common
+
+  app1_1:
+    image: ${APP_IMAGE:-ghcr.io/prgrms-be-devcourse/nbe9-11-team02:latest}
+    container_name: app1_1
+    restart: unless-stopped
+    networks:
+      - common
+    environment:
+      TZ: Asia/Seoul
+      SPRING_CONFIG_IMPORT: optional:file:/app/application-secret.yaml
+    volumes:
+      - /home/ec2-user/secrets/application-secret.yaml:/app/application-secret.yaml:ro
+    mem_limit: 600m
+
+  app1_2:
+    image: ${APP_IMAGE:-ghcr.io/prgrms-be-devcourse/nbe9-11-team02:latest}
+    container_name: app1_2
+    restart: unless-stopped
+    networks:
+      - common
+    environment:
+      TZ: Asia/Seoul
+      SPRING_CONFIG_IMPORT: optional:file:/app/application-secret.yaml
+    volumes:
+      - /home/ec2-user/secrets/application-secret.yaml:/app/application-secret.yaml:ro
+    mem_limit: 600m
+
+networks:
+  common:
+    name: common
+
+volumes:
+  mysql_data:
+COMPOSE_EOF
+
+# docker-compose 실행 (nginx, mysql, redis)
+docker-compose -f /home/ec2-user/app/docker-compose.yaml up -d nginx mysql redis
 
 # MySQL 준비될 때까지 대기
 echo "MySQL이 기동될 때까지 대기 중..."
