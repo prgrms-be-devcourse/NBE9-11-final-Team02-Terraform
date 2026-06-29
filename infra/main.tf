@@ -157,15 +157,52 @@ chmod +x /usr/local/bin/docker-compose
 
 docker network create common
 
+# nginx 설정 부트스트랩. 실제 운영 설정은 첫 배포 시 CD가 레포의
+# nginx/conf.d/sportteam.conf로 덮어쓴다(아래는 CD 동작 전까지의 초기값).
 mkdir -p /home/ec2-user/nginx/conf.d
 cat << 'NGINX_EOF' > /home/ec2-user/nginx/conf.d/sportteam.conf
 server {
     listen 80;
 
-    location / {
-        proxy_pass http://app1_1:8090;
+    resolver 127.0.0.11 valid=10s ipv6=off;
+
+    set $backend  app1_1:8090;
+    set $frontend frontend_1:3000;
+
+    client_max_body_size 20m;
+
+    location /api/ {
+        proxy_pass http://$backend;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /ws/ {
+        proxy_pass http://$backend;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 3600s;
+    }
+
+    location /swagger-ui/ {
+        proxy_pass http://$backend;
+        proxy_set_header Host $host;
+    }
+    location /v3/api-docs {
+        proxy_pass http://$backend;
+        proxy_set_header Host $host;
+    }
+
+    location / {
+        proxy_pass http://$frontend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
 NGINX_EOF
