@@ -126,7 +126,7 @@ resource "aws_iam_role_policy_attachment" "ec2_ssm" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
-# SSM Parameter Store에서 /team02/* 경로의 파라미터 읽기 권한
+# SSM Parameter Store에서 /team02/* 경로의 파라미터 읽기/쓰기 권한 (CD에서 PutParameter 사용)
 resource "aws_iam_role_policy" "ec2_ssm_parameter_read" {
   name = "${var.prefix}-ssm-parameter-read"
   role = aws_iam_role.ec2_role_1.name
@@ -135,7 +135,7 @@ resource "aws_iam_role_policy" "ec2_ssm_parameter_read" {
     Version = "2012-10-17"
     Statement = [{
       Effect   = "Allow"
-      Action   = ["ssm:GetParameter"]
+      Action   = ["ssm:GetParameter", "ssm:PutParameter"]
       Resource = "arn:aws:ssm:${var.region}:*:parameter/team02/*"
     }]
   })
@@ -206,6 +206,8 @@ services:
     environment:
       MYSQL_ROOT_PASSWORD: ${var.password_1}
       MYSQL_DATABASE: team02_prod
+      MYSQL_USER: team02
+      MYSQL_PASSWORD: ${var.password_1}
       TZ: Asia/Seoul
     ports:
       - "3306:3306"
@@ -221,8 +223,28 @@ services:
     command: redis-server --requirepass ${var.password_1}
     environment:
       TZ: Asia/Seoul
-    ports:
-      - "6379:6379"
+    networks:
+      - common
+
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: kafka_1
+    restart: unless-stopped
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka_1:9093
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka_1:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      TZ: Asia/Seoul
     networks:
       - common
 
@@ -235,9 +257,13 @@ services:
     environment:
       TZ: Asia/Seoul
       SPRING_CONFIG_IMPORT: optional:file:/app/application-secret.yaml
+      SPRING_PROFILES_ACTIVE: prod
+      KAFKA_BOOTSTRAP_SERVERS: kafka_1:9092
     volumes:
       - /home/ec2-user/secrets/application-secret.yaml:/app/application-secret.yaml:ro
     mem_limit: 600m
+    profiles:
+      - prod
 
   app1_2:
     image: ${APP_IMAGE:-ghcr.io/prgrms-be-devcourse/nbe9-11-team02:latest}
@@ -248,20 +274,25 @@ services:
     environment:
       TZ: Asia/Seoul
       SPRING_CONFIG_IMPORT: optional:file:/app/application-secret.yaml
+      SPRING_PROFILES_ACTIVE: prod
+      KAFKA_BOOTSTRAP_SERVERS: kafka_1:9092
     volumes:
       - /home/ec2-user/secrets/application-secret.yaml:/app/application-secret.yaml:ro
     mem_limit: 600m
+    profiles:
+      - prod
 
 networks:
   common:
     name: common
+    external: true
 
 volumes:
   mysql_data:
 COMPOSE_EOF
 
-# docker-compose 실행 (nginx, mysql, redis)
-docker-compose -f /home/ec2-user/app/docker-compose.yaml up -d nginx mysql redis
+# docker-compose 실행 (nginx, mysql, redis, kafka)
+docker-compose -f /home/ec2-user/app/docker-compose.yaml up -d nginx mysql redis kafka
 
 # MySQL 준비될 때까지 대기
 echo "MySQL이 기동될 때까지 대기 중..."
@@ -319,4 +350,13 @@ resource "aws_instance" "ec2_1" {
   user_data = <<-EOF
 ${local.ec2_user_data_base}
 EOF
+}
+
+resource "aws_eip" "eip_1" {
+  instance = aws_instance.ec2_1.id
+  domain   = "vpc"
+
+  tags = {
+    Name = "${var.prefix}-eip-1"
+  }
 }
