@@ -126,7 +126,7 @@ resource "aws_iam_role_policy" "ec2_ssm_parameter_read" {
     Version = "2012-10-17"
     Statement = [{
       Effect   = "Allow"
-      Action   = ["ssm:GetParameter", "ssm:PutParameter"]
+      Action   = ["ssm:GetParameter"]
       Resource = "arn:aws:ssm:${var.region}:*:parameter/team02/*"
     }]
   })
